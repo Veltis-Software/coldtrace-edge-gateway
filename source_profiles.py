@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import hashlib
 import math
 import re
 import uuid
@@ -10,6 +11,14 @@ import uuid
 
 class SourceInputError(ValueError):
     """A source reading cannot be interpreted using its configured profile."""
+
+
+def _configuration_bytes(path):
+    with open(path, "rb") as source:
+        content = source.read(262145)
+    if len(content) > 262144:
+        raise SourceInputError("Source configuration exceeds 256 KiB")
+    return content
 
 
 @dataclass(frozen=True)
@@ -79,8 +88,7 @@ class SourceRegistry:
 
     @classmethod
     def load(cls, path):
-        with open(path, encoding="utf-8") as source:
-            return cls(json.load(source))
+        return cls(json.loads(_configuration_bytes(path).decode("utf-8-sig")))
 
     def resolve(self, source_id, transport):
         profile = self._profiles.get(source_id)
@@ -170,3 +178,23 @@ class IncorporationPipeline:
         except (ValueError, UnicodeError) as exc:
             raise SourceInputError("Malformed JSON") from exc
         return self.ingest(parts[1], reading, "mqtt")
+
+
+class RegistryReloader:
+    """Validate the whole replacement before swapping the live registry on the agent loop."""
+
+    def __init__(self, path, pipeline):
+        self.path = path
+        self.pipeline = pipeline
+        self._fingerprint = None
+        self.reload_if_changed()
+
+    def reload_if_changed(self):
+        content = _configuration_bytes(self.path)
+        fingerprint = hashlib.sha256(content).digest()
+        if fingerprint == self._fingerprint:
+            return False
+        registry = SourceRegistry(json.loads(content.decode("utf-8-sig")))
+        self.pipeline.registry = registry
+        self._fingerprint = fingerprint
+        return True
