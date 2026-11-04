@@ -71,6 +71,24 @@ container. Mount `/data` persistently and mount the profile file read-only.
 | 413 | Body size is outside 1–65536 bytes. |
 | 415 | Content type is not JSON. |
 
+## Configuration refresh
+
+The agent checks its profile file every five seconds; change the interval with
+`--source-refresh-seconds`. Replace the exported configuration file atomically.
+The complete registry is validated before it replaces the active one. Invalid,
+missing or oversized files leave the last valid registry in use and log a bounded
+diagnostic. The maximum configuration size is 256 KiB.
+
+Reload does not recreate the pipeline, HTTP server, SQLite database, sequence
+counters or batches. Buffered readings retain their original source metadata and
+stable retry payloads; new inputs use the new mapping. A removed source is rejected
+before storage after the reload. Mount the containing directory read-only rather
+than an individually bind-mounted file when using host-side atomic replacement.
+
+Coordinate the file rollout with Asset Management's configuration revision.
+Monitoring checks the source effective at capture time. The agent retains any
+unconfirmed batch on a configuration conflict; it does not silently discard data.
+
 ## Verification
 
 ```sh

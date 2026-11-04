@@ -8,7 +8,12 @@ import unittest
 
 from edge_agent import EdgeBuffer
 from http_input import make_http_server
-from source_profiles import SourceRegistry, SourceInputError, IncorporationPipeline
+from source_profiles import (
+    SourceRegistry,
+    SourceInputError,
+    IncorporationPipeline,
+    RegistryReloader,
+)
 
 CONFIG = Path(__file__).parent / "config" / "source-profiles.example.json"
 TOKEN = "local-integration-token-not-a-production-secret"
@@ -62,6 +67,61 @@ class SourceIntegrationTests(unittest.TestCase):
             self.assertEqual("%RH", b["humidityUnit"])
             self.assertEqual(1, b["schemaVersion"])
         self.assertEqual(200, self.buffer.pending())
+
+    def test_source_reload_rejects_retired_input_without_rewriting_durable_batches(
+        self,
+    ):
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps(self.config), encoding="utf-8")
+        reloader = RegistryReloader(path, self.pipeline)
+        old = self.pipeline.receive_mqtt(
+            "coldtrace/camara-lacteos/readings", json.dumps(self.mqtt())
+        )
+        batch = self.buffer.next_batch("11111111-1111-1111-1111-111111111111")
+        replacement = deepcopy(self.config)
+        replacement["sources"][0].update(
+            sourceId="camara-lacteos-repuesto", transport="http", temperatureUnit="F"
+        )
+        path.write_text(json.dumps(replacement), encoding="utf-8")
+        self.assertTrue(reloader.reload_if_changed())
+        self.assertFalse(reloader.reload_if_changed())
+        with self.assertRaises(SourceInputError):
+            self.pipeline.receive_mqtt(
+                "coldtrace/camara-lacteos/readings", json.dumps(self.mqtt())
+            )
+        new = self.pipeline.ingest(
+            "camara-lacteos-repuesto", self.mqtt(temperature=39.2), "http"
+        )
+        self.assertEqual(old["deviceUuid"], new["deviceUuid"])
+        self.assertEqual(old["sequenceNumber"] + 1, new["sequenceNumber"])
+        self.assertAlmostEqual(4, new["temperature"])
+        self.assertEqual(
+            batch, self.buffer.next_batch("11111111-1111-1111-1111-111111111111")
+        )
+        self.assertEqual(2, self.buffer.pending())
+
+    def test_invalid_or_missing_reload_keeps_the_last_complete_registry(self):
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps(self.config), encoding="utf-8")
+        reloader = RegistryReloader(path, self.pipeline)
+        previous = self.pipeline.registry
+        for content in (
+            "{",
+            json.dumps({"schemaVersion": 2, "sources": []}),
+            "x" * 262145,
+        ):
+            path.write_text(content, encoding="utf-8")
+            with self.assertRaises(ValueError):
+                reloader.reload_if_changed()
+            self.assertIs(previous, self.pipeline.registry)
+        path.unlink()
+        with self.assertRaises(OSError):
+            reloader.reload_if_changed()
+        self.assertIs(previous, self.pipeline.registry)
+        self.pipeline.receive_mqtt(
+            "coldtrace/camara-lacteos/readings", json.dumps(self.mqtt())
+        )
+        self.assertEqual(1, self.buffer.pending())
 
     def test_rejected_readings_do_not_write_or_advance_sequence(self):
         cases = [
