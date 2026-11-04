@@ -1,4 +1,4 @@
-"""Academic MQTT/simulator gateway with durable batches and bounded retries (ADR-0005)."""
+"""MQTT/HTTP edge gateway with durable batches and bounded retries (ADR-0005)."""
 
 import argparse
 import json
@@ -9,21 +9,23 @@ import uuid
 from datetime import datetime, timezone
 import urllib.request
 import urllib.error
+from source_profiles import SourceRegistry, SourceInputError, IncorporationPipeline
+from http_input import make_http_server
 
 
 class EdgeBuffer:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.executescript(
-            """
+        self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sequence_counters(device TEXT PRIMARY KEY, value INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS readings(id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL, recorded_at TEXT NOT NULL, batch_id TEXT);
         CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-        """
-        )
+        """)
 
-    def append(self, device, temperature, humidity=None, recorded_at=None):
+    def append(
+        self, device, temperature, humidity=None, recorded_at=None, source_context=None
+    ):
         with self.db:
             self.db.execute(
                 "INSERT INTO sequence_counters(device,value) VALUES (?,0) ON CONFLICT(device) DO NOTHING",
@@ -45,6 +47,8 @@ class EdgeBuffer:
                 "temperature": temperature,
                 "humidity": humidity,
             }
+            if source_context:
+                payload.update(source_context)
             self.db.execute(
                 "INSERT INTO readings(payload,recorded_at) VALUES (?,?)",
                 (json.dumps(payload), at),
@@ -140,15 +144,42 @@ def main():
     p.add_argument("--duration", type=float, default=60)
     p.add_argument("--mqtt-host")
     p.add_argument("--mqtt-port", type=int, default=1883)
+    p.add_argument("--source-profiles", help="Versioned JSON source registry")
+    p.add_argument("--http-host", default="127.0.0.1")
+    p.add_argument(
+        "--http-port", type=int, help="Enable authenticated HTTP source input"
+    )
     args = p.parse_args()
     gateway = os.environ["GATEWAY_UUID"]
     gateway_key = os.environ["GATEWAY_API_KEY"]
     base = os.environ["API_BASE_URL"]
-    devices = [
-        str(uuid.UUID(int=uuid.UUID(os.environ["DEVICE_UUID"]).int + i))
-        for i in range(args.sensors)
-    ]
+    devices = (
+        []
+        if args.source_profiles
+        else [
+            str(uuid.UUID(int=uuid.UUID(os.environ["DEVICE_UUID"]).int + i))
+            for i in range(args.sensors)
+        ]
+    )
     buffer = EdgeBuffer(args.db)
+    pipeline = (
+        IncorporationPipeline(SourceRegistry.load(args.source_profiles), buffer)
+        if args.source_profiles
+        else None
+    )
+    if args.http_port is not None and pipeline is None:
+        p.error("--http-port requires --source-profiles")
+    if pipeline and not args.mqtt_host and args.http_port is None:
+        p.error("Configure --mqtt-host or --http-port for source profiles")
+    http_server = (
+        make_http_server(
+            (args.http_host, args.http_port),
+            pipeline,
+            os.environ.get("EDGE_INGEST_TOKEN"),
+        )
+        if args.http_port is not None
+        else None
+    )
     started = time.monotonic()
     retry = 1
     next_send = 0
@@ -163,13 +194,21 @@ def main():
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
         def receive(client, userdata, message):
-            reading = json.loads(message.payload)
-            buffer.append(
-                message.topic.split("/")[1],
-                reading["temperature"],
-                reading.get("humidity"),
-                reading.get("recordedAt"),
-            )
+            nonlocal generated
+            try:
+                if pipeline:
+                    pipeline.receive_mqtt(message.topic, message.payload)
+                else:
+                    reading = json.loads(message.payload)
+                    buffer.append(
+                        message.topic.split("/")[1],
+                        reading["temperature"],
+                        reading.get("humidity"),
+                        reading.get("recordedAt"),
+                    )
+                generated += 1
+            except (ValueError, KeyError, TypeError, UnicodeError, SourceInputError):
+                print("Rejected incompatible MQTT reading", flush=True)
 
         client.on_message = receive
         client.connect(args.mqtt_host, args.mqtt_port)
@@ -178,11 +217,15 @@ def main():
         now = time.monotonic()
         if client:
             client.loop(timeout=0.05)
-        elif now >= next_sample:
+        elif not pipeline and now >= next_sample:
             for device in devices:
                 buffer.append(device, 4.0, 60.0)
             generated += len(devices)
             next_sample = now + args.interval
+        if http_server:
+            pending_before_http = buffer.pending()
+            http_server.handle_request()
+            generated += buffer.pending() - pending_before_http
         peak_pending = max(peak_pending, buffer.pending())
         if now - started >= args.cut_seconds:
             if now >= next_heartbeat:
@@ -230,6 +273,8 @@ def main():
         time.sleep(0.05)
     if client:
         client.disconnect()
+    if http_server:
+        http_server.server_close()
     print(
         json.dumps(
             {
