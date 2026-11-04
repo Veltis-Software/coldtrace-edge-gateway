@@ -1,0 +1,26 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "ColdTrace Edge source input", "version": "0.2.0"},
+  "servers": [{"url": "http://127.0.0.1:8091", "description": "Local edge input"}],
+  "security": [{"edgeInputToken": []}],
+  "paths": {
+    "/api/v1/sources/{sourceId}/readings": {
+      "post": {
+        "operationId": "incorporateSourceReading",
+        "summary": "Normalize and durably buffer a configured HTTP source reading",
+        "parameters": [{"name": "sourceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "description": "Field names and temperature unit are resolved from the source profile. Maximum body size 65536 bytes."}, "example": {"tempF": 39.2, "rh": 60, "timestamp": "2026-11-03T19:00:00Z"}}}},
+        "responses": {
+          "202": {"description": "Reading stored at the edge; cloud delivery is confirmed separately", "content": {"application/json": {"schema": {"type": "object", "required": ["accepted", "sequenceNumber"], "properties": {"accepted": {"type": "integer", "enum": [1]}, "sequenceNumber": {"type": "integer", "minimum": 1}}}}}},
+          "400": {"description": "Malformed JSON or incompatible source, version, unit, measurement or timestamp"},
+          "401": {"description": "Missing or invalid edge input token"},
+          "404": {"description": "Unknown route"},
+          "408": {"description": "Body read timed out"},
+          "413": {"description": "Body size outside 1 to 65536 bytes"},
+          "415": {"description": "Content type must be application/json"}
+        }
+      }
+    }
+  },
+  "components": {"securitySchemes": {"edgeInputToken": {"type": "http", "scheme": "bearer", "description": "Separate local edge input credential; not a user JWT or gateway cloud key"}}}
+}

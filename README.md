@@ -21,6 +21,19 @@ Heartbeat interval is 10 seconds; retry backoff is 1–60 seconds. Readings olde
 than 24 hours trigger a warning and are retained until confirmed. The simulator
 prints generated/accepted/duplicate/pending counts and measured recovery time.
 
+## Versioned source profiles
+
+MQTT and authenticated HTTP inputs can share a versioned source registry and
+normalization pipeline. Supported measurements are converted to Celsius, %RH and
+UTC before durable storage. See [source integration](docs/source-integration.md)
+for configuration, execution, response codes and verification scope. Omitting
+`--source-profiles` preserves the original simulator and MQTT input behavior.
+
+The HTTP contract is in `contracts/source-input.openapi.json`. Import
+`tests/source-input.postman_collection.json` into Postman and set `baseUrl` and
+`edgeToken` locally, or execute it with Newman against a running agent. Never
+export an environment containing a real input token into version control.
+
 ## MQTT adapter
 
 Install `requirements.txt` and pass `--mqtt-host` to subscribe to
