@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import time
@@ -9,7 +10,12 @@ import uuid
 from datetime import datetime, timezone
 import urllib.request
 import urllib.error
-from source_profiles import SourceRegistry, SourceInputError, IncorporationPipeline
+from source_profiles import (
+    SourceRegistry,
+    SourceInputError,
+    IncorporationPipeline,
+    RegistryReloader,
+)
 from http_input import make_http_server
 
 
@@ -145,11 +151,22 @@ def main():
     p.add_argument("--mqtt-host")
     p.add_argument("--mqtt-port", type=int, default=1883)
     p.add_argument("--source-profiles", help="Versioned JSON source registry")
+    p.add_argument(
+        "--source-refresh-seconds",
+        type=float,
+        default=5,
+        help="Interval for validated source file reload (default: 5 seconds)",
+    )
     p.add_argument("--http-host", default="127.0.0.1")
     p.add_argument(
         "--http-port", type=int, help="Enable authenticated HTTP source input"
     )
     args = p.parse_args()
+    if (
+        not math.isfinite(args.source_refresh_seconds)
+        or args.source_refresh_seconds <= 0
+    ):
+        p.error("--source-refresh-seconds must be a finite positive number")
     gateway = os.environ["GATEWAY_UUID"]
     gateway_key = os.environ["GATEWAY_API_KEY"]
     base = os.environ["API_BASE_URL"]
@@ -167,6 +184,7 @@ def main():
         if args.source_profiles
         else None
     )
+    reloader = RegistryReloader(args.source_profiles, pipeline) if pipeline else None
     if args.http_port is not None and pipeline is None:
         p.error("--http-port requires --source-profiles")
     if pipeline and not args.mqtt_host and args.http_port is None:
@@ -185,6 +203,7 @@ def main():
     next_send = 0
     next_heartbeat = 0
     next_sample = 0
+    next_refresh = 0
     client = None
     generated = accepted = duplicated = peak_pending = 0
     recovery_seconds = None
@@ -215,6 +234,16 @@ def main():
         client.subscribe("coldtrace/+/readings")
     while time.monotonic() - started < args.duration:
         now = time.monotonic()
+        if reloader and now >= next_refresh:
+            try:
+                if reloader.reload_if_changed():
+                    print("Source configuration reloaded", flush=True)
+            except (OSError, ValueError, UnicodeError):
+                print(
+                    "Source configuration reload rejected; previous configuration retained",
+                    flush=True,
+                )
+            next_refresh = now + args.source_refresh_seconds
         if client:
             client.loop(timeout=0.05)
         elif not pipeline and now >= next_sample:

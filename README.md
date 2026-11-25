@@ -28,6 +28,9 @@ normalization pipeline. Supported measurements are converted to Celsius, %RH and
 UTC before durable storage. See [source integration](docs/source-integration.md)
 for configuration, execution, response codes and verification scope. Omitting
 `--source-profiles` preserves the original simulator and MQTT input behavior.
+The active profile file is revalidated every five seconds (configurable with
+`--source-refresh-seconds`). Valid changes replace the live registry atomically;
+invalid replacements leave it active, and existing SQLite batches remain intact.
 
 The HTTP contract is in `contracts/source-input.openapi.json`. Import
 `tests/source-input.postman_collection.json` into Postman and set `baseUrl` and
