@@ -1,0 +1,27 @@
+{
+  "info": {"name": "ColdTrace source input", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "variable": [{"key": "baseUrl", "value": "http://127.0.0.1:8091"}, {"key": "edgeToken", "value": ""}],
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{edgeToken}}", "type": "string"}]},
+  "item": [
+    {
+      "name": "Accept Fahrenheit source",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/v1/sources/camara-verduras/readings", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"tempF\":39.2,\"rh\":60,\"timestamp\":\"2026-11-03T19:00:00Z\"}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Accepted durably at edge', () => pm.response.to.have.status(202));", "pm.test('One reading accepted', () => pm.expect(pm.response.json().accepted).to.eql(1));", "pm.collectionVariables.set('firstSequence', pm.response.json().sequenceNumber);"]}}]
+    },
+    {
+      "name": "Reject unsupported unit",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/v1/sources/camara-verduras/readings", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"tempF\":39.2,\"temperatureUnit\":\"K\",\"rh\":60,\"timestamp\":\"2026-11-03T19:00:00Z\"}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Incompatible input rejected', () => pm.response.to.have.status(400));"]}}]
+    },
+    {
+      "name": "Reject missing credential",
+      "request": {"auth": {"type": "noauth"}, "method": "POST", "url": "{{baseUrl}}/api/v1/sources/camara-verduras/readings", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"tempF\":39.2,\"rh\":60,\"timestamp\":\"2026-11-03T19:00:00Z\"}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Credential required', () => pm.response.to.have.status(401));"]}}]
+    },
+    {
+      "name": "Confirm rejected input did not consume sequence",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/v1/sources/camara-verduras/readings", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"tempF\":41,\"rh\":61,\"timestamp\":\"2026-11-03T19:00:10Z\"}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Second valid input accepted', () => pm.response.to.have.status(202));", "pm.test('Only valid inputs advance sequence', () => pm.expect(pm.response.json().sequenceNumber).to.eql(Number(pm.collectionVariables.get('firstSequence')) + 1));"]}}]
+    }
+  ]
+}

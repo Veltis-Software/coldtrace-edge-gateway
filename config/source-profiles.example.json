@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "sourceId": "camara-lacteos",
+      "deviceUuid": "375a362a-6397-4566-9d97-a4097767446c",
+      "transport": "mqtt",
+      "profileVersion": 1,
+      "fields": {"temperature": "temperature", "humidity": "humidity", "recordedAt": "recordedAt"},
+      "temperatureUnit": "C",
+      "humidityUnit": "%RH"
+    },
+    {
+      "sourceId": "camara-verduras",
+      "deviceUuid": "4723d0ef-284d-4a28-a469-7653a8a61486",
+      "transport": "http",
+      "profileVersion": 1,
+      "fields": {"temperature": "tempF", "humidity": "rh", "recordedAt": "timestamp"},
+      "temperatureUnit": "F",
+      "humidityUnit": "%RH"
+    }
+  ]
+}
